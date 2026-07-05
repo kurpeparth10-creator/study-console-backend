@@ -11,10 +11,21 @@ function timeKey(d) {
   return pad(d.getHours()) + ':' + pad(d.getMinutes());
 }
 
+const GRACE_MS = 15 * 60 * 1000; // catch-up window: fire anytime from the due time up to 15 min after
+
 /**
  * Decide if `reminder` should fire at `now` (a Date).
  * A reminder fires at most once per calendar day, tracked via
  * reminder.lastFiredKey (a "YYYY-MM-DD" string).
+ *
+ * Instead of requiring an exact-minute match (which silently skips a
+ * reminder forever if the server happened to be asleep at that exact
+ * minute — Render's free tier spins down after 15 min idle), this checks
+ * a grace window: the reminder fires on the first tick where "now" is at
+ * or after its due time, as long as that's within GRACE_MS of the due
+ * time. If the server was asleep and wakes up 5 minutes late, it still
+ * catches the reminder; if it's more than 15 minutes late, it gives up
+ * for today rather than firing a very stale reminder unexpectedly.
  */
 function shouldFireNow(reminder, now = new Date()) {
   if (!reminder.enabled || reminder.completed) return false;
@@ -22,24 +33,34 @@ function shouldFireNow(reminder, now = new Date()) {
 
   const todayKey = dateKey(now);
   if (reminder.lastFiredKey === todayKey) return false; // already fired today
-  if (timeKey(now) !== reminder.time) return false;      // not this minute
 
+  let refDateKey;
   switch (reminder.repeat) {
     case 'daily':
-      return true;
+      refDateKey = todayKey;
+      break;
     case 'weekly': {
       if (!reminder.date) return false;
       const start = new Date(reminder.date + 'T00:00:00');
-      return start.getDay() === now.getDay();
+      if (start.getDay() !== now.getDay()) return false;
+      refDateKey = todayKey;
+      break;
     }
     case 'custom': {
       const days = Array.isArray(reminder.customDays) ? reminder.customDays : [];
-      return days.includes(now.getDay());
+      if (!days.includes(now.getDay())) return false;
+      refDateKey = todayKey;
+      break;
     }
     case 'none':
     default:
-      return reminder.date === todayKey;
+      if (reminder.date !== todayKey) return false;
+      refDateKey = todayKey;
   }
+
+  const target = new Date(`${refDateKey}T${reminder.time}:00`);
+  const diffMs = now.getTime() - target.getTime();
+  return diffMs >= 0 && diffMs <= GRACE_MS;
 }
 
 /**
