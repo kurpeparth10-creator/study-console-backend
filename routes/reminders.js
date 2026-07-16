@@ -2,7 +2,7 @@
 const express = require('express');
 const { v4: uuid } = require('uuid');
 const db = require('../db');
-const { applySnooze, userLocalToAbsolute } = require('../reminderLogic');
+const { applySnooze } = require('../reminderLogic');
 
 const router = express.Router();
 
@@ -27,11 +27,10 @@ router.post('/', (req, res) => {
     deviceId: req.body.deviceId,
     taskId: req.body.taskId || null,
     label: req.body.label || 'Reminder',
-    date: req.body.date || null,
-    time: req.body.time,
-    tzOffsetMinutes: Number.isFinite(req.body.tzOffsetMinutes) ? req.body.tzOffsetMinutes : 0,
+    date: req.body.date || null,           // 'YYYY-MM-DD', required if repeat === 'none'
+    time: req.body.time,                    // 'HH:MM' 24hr
     enabled: req.body.enabled !== false,
-    repeat: req.body.repeat || 'none',
+    repeat: req.body.repeat || 'none',      // none | daily | weekly | custom
     customDays: Array.isArray(req.body.customDays) ? req.body.customDays : [],
     sound: req.body.sound || 'classic',
     completed: false,
@@ -44,7 +43,7 @@ router.post('/', (req, res) => {
   res.status(201).json(reminder);
 });
 
-// GET /api/reminders?deviceId=...
+// GET /api/reminders?deviceId=...  — list all reminders for a device
 router.get('/', (req, res) => {
   const { deviceId } = req.query;
   if (!deviceId) return res.status(400).json({ error: 'deviceId query param is required' });
@@ -61,14 +60,14 @@ router.get('/upcoming', (req, res) => {
 
   const upcoming = db.getRemindersForDevice(deviceId).filter(r => {
     if (!r.enabled || r.completed || !r.date || !r.time) return false;
-    const fireAt = userLocalToAbsolute(r.date, r.time, r.tzOffsetMinutes);
+    const fireAt = new Date(`${r.date}T${r.time}:00`);
     return fireAt >= now && fireAt <= horizon;
   });
 
   res.json(upcoming);
 });
 
-// PUT /api/reminders/:id
+// PUT /api/reminders/:id — update a reminder
 router.put('/:id', (req, res) => {
   const existing = db.getReminderById(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Reminder not found' });
@@ -76,7 +75,7 @@ router.put('/:id', (req, res) => {
   const updated = {
     ...existing,
     ...req.body,
-    id: existing.id,
+    id: existing.id, // id is immutable
     updatedAt: new Date().toISOString(),
   };
   db.saveReminder(updated);
@@ -103,7 +102,7 @@ router.post('/:id/complete', (req, res) => {
   res.json(existing);
 });
 
-// POST /api/reminders/:id/snooze
+// POST /api/reminders/:id/snooze  { minutes: 5 | 10 | 15 }
 router.post('/:id/snooze', (req, res) => {
   const existing = db.getReminderById(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Reminder not found' });
